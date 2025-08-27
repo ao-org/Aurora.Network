@@ -80,35 +80,50 @@ namespace Aurora::Network::Detail
 
     Bool Acceptor::Listen(UInt32 Capacity, CStr8 Address, CStr8 Service)
     {
+        // Resolve address -> endpoints (modern ASIO)
+        asio::ip::tcp::resolver resolver(mAcceptor.get_executor());
         asio::error_code InError;
+        auto results = resolver.resolve(Address.data(), Service.data(), InError);
+        if (InError || results.begin() == results.end())
+        {
+            const auto msg = InError ? InError.message() : std::string("resolve returned no endpoints");
+            mOnError(InError ? InError.value() : static_cast<int>(asio::error::not_found),
+                MakeStringCompatible(msg));
+            return false;
+        }
 
-        asio::ip::tcp::resolver Resolver(mAcceptor.get_executor());
-        const auto Result = Resolver.resolve(Address.data(), Service.data(), InError);
+        const asio::ip::tcp::endpoint Endpoint = results.begin()->endpoint();
+
+        mDatabase.resize(Capacity + 1);
+
+        // Open
+        InError.clear();
+        mAcceptor.open(Endpoint.protocol(), InError);
         if (InError)
         {
             mOnError(InError.value(), MakeStringCompatible(InError.message()));
             return false;
         }
 
-        const asio::ip::tcp::endpoint Endpoint = (* Result);
-
-        mDatabase.resize(Capacity + 1);
-
-        if (mAcceptor.open(Endpoint.protocol(), InError))
+        // Reuse address
+        mAcceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true), InError);
+        if (InError)
         {
             mOnError(InError.value(), MakeStringCompatible(InError.message()));
             return false;
         }
 
-        mAcceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
-
-        if (mAcceptor.bind(Endpoint, InError))
+        // Bind
+        mAcceptor.bind(Endpoint, InError);
+        if (InError)
         {
             mOnError(InError.value(), MakeStringCompatible(InError.message()));
             return false;
         }
 
-        if (mAcceptor.listen(mDatabase.size(), InError))
+        // Listen
+        mAcceptor.listen(static_cast<int>(mDatabase.size()), InError);
+        if (InError)
         {
             mOnError(InError.value(), MakeStringCompatible(InError.message()));
             return false;
@@ -116,11 +131,13 @@ namespace Aurora::Network::Detail
 
         const auto OnCompletion = [Self = this](const auto Error) {
             Self->WhenAccept(Error);
-        };
+            };
         mAcceptor.async_accept(mConnector, OnCompletion);
 
         return true;
     }
+
+
 
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
