@@ -76,8 +76,17 @@ namespace Aurora::Network::Detail
 
     void Acceptor::Listen(UInt32 Capacity, CStr8 Address, CStr8 Service)
     {
-        const asio::ip::tcp::endpoint Endpoint
-            = (* asio::ip::tcp::resolver(mAcceptor.get_executor()).resolve(Address.data(), Service.data()));
+        asio::ip::tcp::resolver resolver(mAcceptor.get_executor());
+        std::error_code ec;
+        auto results = resolver.resolve(Address.data(), Service.data(), ec);
+        if (ec || results.begin() == results.end())
+        {
+            // handle resolve failure as you already do elsewhere
+            // e.g., WhenError(ec); return;
+            return;
+        }
+
+        const asio::ip::tcp::endpoint Endpoint = results.begin()->endpoint();
 
         mDatabase.resize(Capacity + 1);
 
@@ -88,9 +97,10 @@ namespace Aurora::Network::Detail
 
         const auto OnCompletion = [Self = this](const auto Error) {
             Self->WhenAccept(Error);
-        };
+            };
         mAcceptor.async_accept(mConnector, OnCompletion);
     }
+
 
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

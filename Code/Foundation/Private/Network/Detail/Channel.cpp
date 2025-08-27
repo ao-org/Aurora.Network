@@ -286,48 +286,42 @@ namespace Aurora::Network::Detail
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    void Channel::WhenResolve(const std::error_code & Error, asio::ip::tcp::resolver::iterator Result)
+    void Channel::WhenResolve(const std::error_code& Error,
+        asio::ip::tcp::resolver::results_type Result)
     {
         if (Error)
         {
             WhenError(Error);
+            return;
         }
-        else
-        {
-            const asio::ip::tcp::endpoint Endpoint = (* Result);
 
-            const auto OnCompletion = [Self = shared_from_this(), Result = ++Result](const auto Error) {
-                Self->WhenConnect(eastl::forward<decltype(Error)>(Error), Result);
-            };
-            mChannel.async_connect(Endpoint, OnCompletion);
-        }
+        auto Self = shared_from_this();
+
+        // Let ASIO try all endpoints in 'Result' for us.
+        asio::async_connect(
+            mChannel,
+            Result,
+            [Self, Result](const std::error_code& ec, const auto&) mutable
+            {
+                // Signature unchanged; we still pass a results_type.
+                Self->WhenConnect(ec, Result);
+            });
     }
 
-    // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-    // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-    void Channel::WhenConnect(const std::error_code & Error, asio::ip::tcp::resolver::iterator Result)
+    void Channel::WhenConnect(const std::error_code& Error,
+        asio::ip::tcp::resolver::results_type /*Result*/)
     {
         if (Error)
         {
             mChannel.close();
+            // async_connect already tried all endpoints in the sequence.
+            WhenError(Error);
+            return;
+        }
 
-            // try to connect to the next endpoint in the list (if available),
-            // otherwise notify about it.
-            if (Result != asio::ip::tcp::resolver::iterator())
-            {
-                WhenResolve(std::error_code(), Result);
-            }
-            else
-            {
-                WhenError(Error);
-            }
-        }
-        else
-        {
-            Start();
-        }
+        Start();
     }
+
 
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

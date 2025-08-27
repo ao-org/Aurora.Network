@@ -37,14 +37,13 @@ ExternalProject_Add(EP_EASTL
     UPDATE_COMMAND "" INSTALL_COMMAND "")
 ExternalProject_Get_Property(EP_EASTL SOURCE_DIR)
 ExternalProject_Get_Property(EP_EASTL BINARY_DIR)
+
+
 LIST(APPEND PROJECT_INCLUDE
     ${SOURCE_DIR}/include
-    ${SOURCE_DIR}/test/packages/EAAssert/include
-    ${SOURCE_DIR}/test/packages/EABase/include/common
-    ${SOURCE_DIR}/test/packages/EAMain/include
-    ${SOURCE_DIR}/test/packages/EAStdC/include
-    ${SOURCE_DIR}/test/packages/EAThread/include)
-LIST(APPEND PROJECT_LIBRARY ${BINARY_DIR}${CONFIGURATION_SUFFIX}/${CMAKE_BUILD_TYPE}/EASTL.lib)
+    ${BINARY_DIR}/_deps/eabase-src/include/Common)
+LIST(APPEND PROJECT_LIBRARY "${BINARY_DIR}/$<CONFIG>/EASTL.lib")
+
 
 ## -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 ## Dependency (ASIO)
@@ -80,3 +79,5 @@ TARGET_LINK_LIBRARIES(${PROJECT_NAME} PUBLIC ${PROJECT_LIBRARY})
 ## -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 TARGET_INCLUDE_DIRECTORIES(${PROJECT_NAME} PUBLIC ${PROJECT_INCLUDE})
+# Ensure externals build before Foundation
+add_dependencies(${PROJECT_NAME} EP_EASTL EP_ASIO)
