@@ -3,13 +3,13 @@ name: Build (Win32 Debug & Release — DLLs only; Debug symbols)
 on:
   push:
     branches: [ main ]
-    tags: [ '*' ]              # optional
+    tags: [ '*' ]
   release:
-    types: [published]         # runs when you click "Publish release"
+    types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: write              # needed to delete/upload release assets
+  contents: write
 
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 8
@@ -35,7 +35,6 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts (convenience): DLLs + PDBs if present (no .lib, no .exe)
       - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
@@ -45,9 +44,6 @@ jobs:
             ${{ github.workspace }}\build\**\${{ matrix.config }}\*.pdb
           if-no-files-found: warn
 
-      # ----- Release publishing (only when a GitHub Release is published) -----
-
-      # Remove any existing assets with same names to avoid stale uploads
       - name: Remove existing assets
         if: github.event_name == 'release' && github.event.action == 'published'
         uses: actions/github-script@v7
@@ -68,7 +64,6 @@ jobs:
               }
             }
 
-      # Stage and zip EXACT files; print zip contents; fail if any .lib is present
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
@@ -84,18 +79,16 @@ jobs:
           $bins = @($all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName)
           $syms = @($all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName)
 
-          # Prepare clean staging dirs
+          # Clean staging
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stage
           New-Item -ItemType Directory -Force -Path "$stage\binaries","$stage\symbols" | Out-Null
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-          # Copy ONLY the files we want into staging
+          # Copy ONLY what we want
           foreach ($f in $bins) { Copy-Item $f "$stage\binaries" -Force }
-          if ($cfg -eq "Debug") {
-            foreach ($f in $syms) { Copy-Item $f "$stage\symbols" -Force }
-          }
+          if ($cfg -eq "Debug") { foreach ($f in $syms) { Copy-Item $f "$stage\symbols" -Force } }
 
-          # Zip from staging (guarantees no .lib/.exe/etc)
+          # Create zips from staging (so .lib can’t sneak in)
           $zipBin = "$out\Aurora.Network-win32-$cfg-binaries.zip"
           $zipSym = "$out\Aurora.Network-win32-$cfg-symbols.zip"
           if (Test-Path $zipBin) { Remove-Item $zipBin -Force }
@@ -109,9 +102,8 @@ jobs:
             if ($symFiles) { Compress-Archive -Path $symFiles -DestinationPath $zipSym -Force }
           }
 
-          # --- Print and verify zip entries (no .lib allowed) ---
+          # Print & verify zip contents (no .lib allowed)
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-
           function Show-And-VerifyZip([string]$zipPath, [string]$label) {
             if (Test-Path $zipPath) {
               $z = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
@@ -128,19 +120,16 @@ jobs:
               Write-Host "ZIP ($label): (not created)"
             }
           }
-
           Show-And-VerifyZip $zipBin "binaries"
           if ($cfg -eq "Debug") { Show-And-VerifyZip $zipSym "symbols" }
 
-          # Also show what we staged (human-friendly)
           Write-Host "Binaries staged:"; Get-ChildItem "$stage\binaries" -File | ForEach-Object { Write-Host "  $($_.Name)" }
           if ($cfg -eq "Debug") {
-            Write-Host "Symbols staged:";  Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Host "Symbols staged:"; Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host "  $($_.Name)" }
           } else {
             Write-Host "Symbols staged: (none for Release)"
           }
 
-      # Upload assets to the GitHub Release
       - name: Upload Debug assets
         if: github.event_name == 'release' && github.event.action == 'published' && matrix.config == 'Debug'
         uses: softprops/action-gh-release@v2
