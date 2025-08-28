@@ -39,7 +39,7 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts (helpful for testing): DLLs + PDBs only (no .lib, no .exe)
+      # CI artifacts for convenience: DLLs + PDBs only (no .lib, no .exe)
       - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
@@ -49,7 +49,7 @@ jobs:
             ${{ github.workspace }}\build\**\${{ matrix.config }}\*.pdb
           if-no-files-found: warn
 
-      # On Release publish: package DLLs and symbols separately
+      # Package ONLY DLLs and ONLY PDBs when a Release is published
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
@@ -57,26 +57,24 @@ jobs:
           $cfg  = "${{ matrix.config }}"
           $root = "${{ github.workspace }}"
           $bld  = "$root\build"
-          $out  = "$root\out\$cfg"
-          New-Item -ItemType Directory -Force -Path "$out\binaries","$out\symbols" | Out-Null
 
-          # DLLs only (no .lib, no .exe)
-          Get-ChildItem -Path $bld -Recurse -Include *.dll |
-            Where-Object { $_.FullName -match "\\$cfg\\" } |
-            Copy-Item -Destination "$out\binaries" -Force
+          # Gather exact files for this config
+          $all  = Get-ChildItem -Path $bld -Recurse -File | Where-Object { $_.FullName -match "\\$cfg\\" }
+          $bins = $all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName
+          $syms = $all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName
 
-          # PDB symbols
-          Get-ChildItem -Path $bld -Recurse -Include *.pdb |
-            Where-Object { $_.FullName -match "\\$cfg\\" } |
-            Copy-Item -Destination "$out\symbols" -Force
-
-          # Zip
+          # Output zips
+          New-Item -ItemType Directory -Force -Path "$root\out" | Out-Null
           $zipBin = "$root\out\Aurora.Network-win32-$cfg-binaries.zip"
           $zipSym = "$root\out\Aurora.Network-win32-$cfg-symbols.zip"
           if (Test-Path $zipBin) { Remove-Item $zipBin -Force }
           if (Test-Path $zipSym) { Remove-Item $zipSym -Force }
-          Compress-Archive -Path "$out\binaries\*" -DestinationPath $zipBin
-          Compress-Archive -Path "$out\symbols\*"  -DestinationPath $zipSym
+
+          if ($bins) { Compress-Archive -Path $bins -DestinationPath $zipBin -Force }
+          if ($syms) { Compress-Archive -Path $syms -DestinationPath $zipSym -Force }
+
+          Write-Host "Packed binaries:"; $bins | ForEach-Object { Write-Host "  $_" }
+          Write-Host "Packed symbols:";  $syms | ForEach-Object { Write-Host "  $_" }
 
       - name: Upload zips to GitHub Release
         if: github.event_name == 'release' && github.event.action == 'published'
