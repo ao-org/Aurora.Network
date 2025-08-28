@@ -51,37 +51,48 @@ inline namespace Proxy
 
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
     HRESULT Server::Attach(vbInt32 OnAttach, vbInt32 OnDetach, vbInt32 OnForward, vbInt32 OnReceive, vbInt32 OnError)
     {
-        const auto OnServerAttach  = [OnAttach](UInt32 Session, CStr8 Address)
-        {
-            ((void (STDAPICALLTYPE *)(vbInt32, vbStr16)) OnAttach)(Session, VBString8ToString16(Address));
-        };
-        const auto OnServerDetach  = [OnDetach](UInt32 Session)
-        {
-            ((void (STDAPICALLTYPE *)(vbInt32)) OnDetach)(Session);
-        };
+        const auto OnServerAttach = [OnAttach](UInt32 Session, CStr8 Address)
+            {
+                ((void (STDAPICALLTYPE*)(vbInt32, vbStr16)) OnAttach)(Session, VBString8ToString16(Address));
+            };
+
+        const auto OnServerDetach = [OnDetach](UInt32 Session)
+            {
+                ((void (STDAPICALLTYPE*)(vbInt32)) OnDetach)(Session);
+            };
+
         const auto OnServerForward = [OnForward](UInt32 Session, auto Message)
-        {
-            CComObjectStackEx<Reader> CComReader;
+            {
+                CComObject<Reader>* pReader = nullptr;
+                if (SUCCEEDED(CComObject<Reader>::CreateInstance(&pReader)) && pReader)
+                {
+                    pReader->mWrapper = Message;
+                    // Guard ref so VB can't delete during callback
+                    pReader->AddRef();
+                    ((void (STDAPICALLTYPE*)(vbInt32, CComObject<Reader>*)) OnForward)(Session, pReader);
+                    pReader->Release();
+                }
+            };
 
-            CComReader.mWrapper = Message;
-
-            ((void (STDAPICALLTYPE *)(vbInt32, CComObjectStackEx<Reader> *)) OnForward)(Session, & CComReader);
-        };
         const auto OnServerReceive = [OnReceive](UInt32 Session, auto Message)
-        {
-            CComObjectStackEx<Reader> CComReader;
+            {
+                CComObject<Reader>* pReader = nullptr;
+                if (SUCCEEDED(CComObject<Reader>::CreateInstance(&pReader)) && pReader)
+                {
+                    pReader->mWrapper = Message;
+                    // Guard ref so VB can't delete during callback
+                    pReader->AddRef();
+                    ((void (STDAPICALLTYPE*)(vbInt32, CComObject<Reader>*)) OnReceive)(Session, pReader);
+                    pReader->Release();
+                }
+            };
 
-            CComReader.mWrapper = Message;
-
-            ((void (STDAPICALLTYPE *)(vbInt32, CComObjectStackEx<Reader> *)) OnReceive)(Session, & CComReader);
-        };
         const auto OnServerError = [OnError](UInt32 Code, CStr8 Message)
-        {
-            ((void (STDAPICALLTYPE *)(vbInt32, vbStr16)) OnError)(Code, VBString8ToString16(Message));
-        };
+            {
+                ((void (STDAPICALLTYPE*)(vbInt32, vbStr16)) OnError)(Code, VBString8ToString16(Message));
+            };
 
         mWrapper->Attach(OnServerAttach, OnServerDetach, OnServerForward, OnServerReceive, OnServerError);
         return S_OK;
