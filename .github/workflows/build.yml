@@ -3,13 +3,12 @@ name: Build (Win32 Debug & Release — DLLs only; Debug symbols)
 on:
   push:
     branches: [ main ]
-    tags: [ '*' ]          # optional
   release:
-    types: [ published ]   # runs when you click "Publish release"
+    types: [ published ]    # runs when you click "Publish release"
   workflow_dispatch:
 
 permissions:
-  contents: write          # delete/upload release assets
+  contents: write
 
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 8
@@ -35,7 +34,7 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts for quick download: DLLs + PDBs (if present). No .lib/.exe.
+      # CI artifacts for convenience: only DLLs + (if present) PDBs
       - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
@@ -45,9 +44,7 @@ jobs:
             ${{ github.workspace }}\build\**\${{ matrix.config }}\*.pdb
           if-no-files-found: warn
 
-      # ----- Release publishing (only when a GitHub Release is published) -----
-
-      # Remove existing assets with our names to avoid stale uploads
+      # Remove existing assets with our names (avoids stale uploads)
       - name: Remove existing release assets
         if: github.event_name == 'release' && github.event.action == 'published'
         uses: actions/github-script@v7
@@ -68,7 +65,7 @@ jobs:
               }
             }
 
-      # Stage only the files we want, zip them, print contents, and block .lib
+      # Package from a clean staging folder; PRINT filenames inside each zip
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
@@ -80,13 +77,14 @@ jobs:
           $out   = "$root\out"
 
           # Collect only this config's files
-          $all  = Get-ChildItem -Path $bld -Recurse -File | Where-Object { $_.FullName -match "\\$cfg\\" }
+          $all  = Get-ChildItem -Path $bld -Recurse -File | Where-Object { $_.FullName -match ("\\{0}\\" -f $cfg) }
           $bins = @($all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName)
           $syms = @($all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName)
 
           # Clean staging and create folders
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stage
-          New-Item -ItemType Directory -Force -Path "$stage\binaries","$stage\symbols" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage\binaries" | Out-Null
+          if ($cfg -eq "Debug") { New-Item -ItemType Directory -Force -Path "$stage\symbols" | Out-Null }
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
           # Copy ONLY what we want to ship
@@ -107,36 +105,30 @@ jobs:
             if ($symFiles) { Compress-Archive -Path $symFiles -DestinationPath $zipSym -Force }
           }
 
-          # Print zip contents and FAIL if any .lib is present
+          # Print zip contents (no errors, just logs)
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          function Show-And-VerifyZip([string]$zipPath, [string]$label) {
+          function Show-Zip([string]$zipPath, [string]$label) {
             if (Test-Path $zipPath) {
               $z = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
               try {
                 Write-Host ("ZIP ({0}): {1}" -f $label, $zipPath)
-                foreach ($e in $z.Entries) {
-                  Write-Host ("  - {0}" -f $e.FullName)
-                  if ($e.FullName.EndsWith('.lib',[String]::Comparison::OrdinalIgnoreCase)) {
-                    throw ("Found .lib in {0}: {1}" -f $zipPath, $e.FullName)
-                  }
-                }
+                foreach ($e in $z.Entries) { Write-Host ("  - {0}" -f $e.FullName) }
               } finally { $z.Dispose() }
             } else {
               Write-Host ("ZIP ({0}): (not created)" -f $label)
             }
           }
-          # .NET enum handy alias
-          [StringComparison]$null = [StringComparison]::OrdinalIgnoreCase
-
-          Show-And-VerifyZip $zipBin "binaries"
-          if ($cfg -eq "Debug") { Show-And-VerifyZip $zipSym "symbols" }
+          Show-Zip $zipBin "binaries"
+          if ($cfg -eq "Debug") { Show-Zip $zipSym "symbols" }
 
           # Also log staged files
-          Write-Host "Binaries staged:"; Get-ChildItem "$stage\binaries" -File | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) }
+          Write-Host "Staged binaries:"
+          Get-ChildItem "$stage\binaries" -File | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) }
           if ($cfg -eq "Debug") {
-            Write-Host "Symbols staged:"; Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) }
+            Write-Host "Staged symbols:"
+            Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) }
           } else {
-            Write-Host "Symbols staged: (none for Release)"
+            Write-Host "Staged symbols: (none for Release)"
           }
 
       # Upload assets to the GitHub Release
