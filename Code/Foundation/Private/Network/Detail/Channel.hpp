@@ -109,10 +109,10 @@ namespace Aurora::Network::Detail
         void DoProcess();
 
         // -=(Undocumented)=-
-        void WhenResolve(const std::error_code & Error, asio::ip::tcp::resolver::iterator Result);
+        void WhenResolve(const std::error_code & Error, asio::ip::tcp::resolver::results_type Result);
 
         // -=(Undocumented)=-
-        void WhenConnect(const std::error_code & Error, asio::ip::tcp::resolver::iterator Result);
+        void WhenConnect(const std::error_code & Error, asio::ip::tcp::resolver::results_type Result);
 
         // -=(Undocumented)=-
         void WhenError(const std::error_code & Error);
