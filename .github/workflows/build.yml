@@ -35,7 +35,7 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts (for convenience): DLLs + PDBs if present (no .lib, no .exe)
+      # CI artifacts (convenience): DLLs + PDBs if present (no .lib, no .exe)
       - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
@@ -47,7 +47,7 @@ jobs:
 
       # ----- Release publishing (only when a GitHub Release is published) -----
 
-      # Remove any existing assets with same names (prevents stale zips)
+      # Remove any existing assets with same names to avoid stale uploads
       - name: Remove existing assets
         if: github.event_name == 'release' && github.event.action == 'published'
         uses: actions/github-script@v7
@@ -68,7 +68,7 @@ jobs:
               }
             }
 
-      # Stage and zip EXACT files (DLLs only; symbols only) so .lib can never slip in
+      # Stage and zip EXACT files; print zip contents; fail if any .lib is present
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
@@ -101,18 +101,44 @@ jobs:
           if (Test-Path $zipBin) { Remove-Item $zipBin -Force }
           if (Test-Path $zipSym) { Remove-Item $zipSym -Force }
 
-          if (Test-Path "$stage\binaries") {
-            $binFiles = Get-ChildItem "$stage\binaries" -File
-            if ($binFiles) { Compress-Archive -Path ($binFiles | Select-Object -Expand FullName) -DestinationPath $zipBin -Force }
+          $binFiles = Get-ChildItem "$stage\binaries" -File | Select-Object -Expand FullName
+          if ($binFiles) { Compress-Archive -Path $binFiles -DestinationPath $zipBin -Force }
+
+          if ($cfg -eq "Debug") {
+            $symFiles = Get-ChildItem "$stage\symbols" -File | Select-Object -Expand FullName
+            if ($symFiles) { Compress-Archive -Path $symFiles -DestinationPath $zipSym -Force }
           }
 
-          if ($cfg -eq "Debug" -and (Test-Path "$stage\symbols")) {
-            $symFiles = Get-ChildItem "$stage\symbols" -File
-            if ($symFiles) { Compress-Archive -Path ($symFiles | Select-Object -Expand FullName) -DestinationPath $zipSym -Force }
+          # --- Print and verify zip entries (no .lib allowed) ---
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          function Show-And-VerifyZip([string]$zipPath, [string]$label) {
+            if (Test-Path $zipPath) {
+              $z = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+              try {
+                Write-Host "ZIP ($label): $zipPath"
+                foreach ($e in $z.Entries) {
+                  Write-Host "  - $($e.FullName)"
+                  if ($e.FullName.ToLower().EndsWith('.lib')) {
+                    throw "Found .lib in $zipPath: $($e.FullName)"
+                  }
+                }
+              } finally { $z.Dispose() }
+            } else {
+              Write-Host "ZIP ($label): (not created)"
+            }
           }
 
+          Show-And-VerifyZip $zipBin "binaries"
+          if ($cfg -eq "Debug") { Show-And-VerifyZip $zipSym "symbols" }
+
+          # Also show what we staged (human-friendly)
           Write-Host "Binaries staged:"; Get-ChildItem "$stage\binaries" -File | ForEach-Object { Write-Host "  $($_.Name)" }
-          Write-Host "Symbols staged:";  if ($cfg -eq "Debug") { Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host "  $($_.Name)" } } else { Write-Host "  (none for Release)" }
+          if ($cfg -eq "Debug") {
+            Write-Host "Symbols staged:";  Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host "  $($_.Name)" }
+          } else {
+            Write-Host "Symbols staged: (none for Release)"
+          }
 
       # Upload assets to the GitHub Release
       - name: Upload Debug assets
