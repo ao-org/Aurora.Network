@@ -3,8 +3,16 @@ name: Build (Win32 Debug & Release)
 on:
   push:
     branches: [ main ]
-    tags: [ '*' ]
+    tags: [ '*' ]            # also runs on tag push
+  release:
+    types: [published]       # runs when you click "Publish release"
   workflow_dispatch:
+
+permissions:
+  contents: write            # needed to upload assets to a Release
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: 8
 
 jobs:
   build:
@@ -12,10 +20,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [Debug, Release]
+        config: [Debug, Release]   # build both
 
     steps:
-      - name: Get source code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure CMake (Win32)
@@ -27,7 +35,7 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      - name: Upload artifacts (${{ matrix.config }})
+      - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
           name: Aurora.Network-win32-${{ matrix.config }}
@@ -38,9 +46,30 @@ jobs:
             ${{ github.workspace }}\build\**\${{ matrix.config }}\*.exe
           if-no-files-found: warn
 
-      - name: Create GitHub Release (Release config only)
-        if: startsWith(github.ref, 'refs/tags/') && matrix.config == 'Release' && success()
+      # Package each config as a uniquely named zip when a Release is published
+      - name: Package (${{ matrix.config }})
+        if: github.event_name == 'release' && github.event.action == 'published'
+        shell: pwsh
+        run: |
+          $cfg = "${{ matrix.config }}"
+          $out = "${{ github.workspace }}\out"
+          New-Item -ItemType Directory -Force -Path "$out\$cfg" | Out-Null
+
+          # Collect outputs for this config
+          Get-ChildItem -Path "${{ github.workspace }}\build" -Recurse `
+            -Include *.dll,*.lib,*.pdb,*.exe | Where-Object {
+              $_.FullName -match "\\$cfg\\"
+            } | Copy-Item -Destination "$out\$cfg" -Force
+
+          # Zip with a unique name
+          $zip = "$out\Aurora.Network-win32-$cfg.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$out\$cfg\*" -DestinationPath $zip
+
+      - name: Upload both configs to GitHub Release
+        if: github.event_name == 'release' && github.event.action == 'published'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ github.workspace }}\build\Code\Proxy\Release\Aurora.Network.dll
-
+          files: |
+            ${{ github.workspace }}\out\Aurora.Network-win32-Debug.zip
+            ${{ github.workspace }}\out\Aurora.Network-win32-Release.zip
