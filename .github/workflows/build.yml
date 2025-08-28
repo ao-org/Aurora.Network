@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write              # required to upload assets to a Release
+  contents: write              # required to delete/upload release assets
 
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 8
@@ -39,17 +39,31 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts for convenience: DLLs + PDBs only (no .lib, no .exe)
-      - name: Upload CI artifacts (${{ matrix.config }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: Aurora.Network-win32-${{ matrix.config }}
-          path: |
-            ${{ github.workspace }}\build\**\${{ matrix.config }}\*.dll
-            ${{ github.workspace }}\build\**\${{ matrix.config }}\*.pdb
-          if-no-files-found: warn
+      # ----- Release publishing (only when a GitHub Release is published) -----
 
-      # Package ONLY DLLs and ONLY PDBs when a Release is published
+      # Clean out any previous assets with the same names to avoid stale uploads
+      - name: Remove existing assets with same names
+        if: github.event_name == 'release' && github.event.action == 'published'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const release_id = context.payload.release.id;
+            const names = [
+              'Aurora.Network-win32-Debug-binaries.zip',
+              'Aurora.Network-win32-Debug-symbols.zip',
+              'Aurora.Network-win32-Release-binaries.zip',
+              'Aurora.Network-win32-Release-symbols.zip',
+            ];
+            const {data: assets} = await github.rest.repos.listReleaseAssets({owner, repo, release_id, per_page: 100});
+            for (const a of assets) {
+              if (names.includes(a.name)) {
+                core.info(`Deleting existing asset: ${a.name}`);
+                await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: a.id});
+              }
+            }
+
+      # Create zips: binaries = DLLs only, symbols = PDBs only
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
@@ -58,20 +72,24 @@ jobs:
           $root = "${{ github.workspace }}"
           $bld  = "$root\build"
 
-          # Gather exact files for this config
+          # exact files for this config
           $all  = Get-ChildItem -Path $bld -Recurse -File | Where-Object { $_.FullName -match "\\$cfg\\" }
-          $bins = $all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName
-          $syms = $all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName
+          $bins = @($all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName)
+          $syms = @($all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName)
 
-          # Output zips
+          # guard: ensure Release has symbols
+          if ($cfg -eq "Release" -and -not $syms) {
+            throw "No PDBs found for Release. Ensure /Zi and /DEBUG flags are set."
+          }
+
           New-Item -ItemType Directory -Force -Path "$root\out" | Out-Null
           $zipBin = "$root\out\Aurora.Network-win32-$cfg-binaries.zip"
           $zipSym = "$root\out\Aurora.Network-win32-$cfg-symbols.zip"
           if (Test-Path $zipBin) { Remove-Item $zipBin -Force }
           if (Test-Path $zipSym) { Remove-Item $zipSym -Force }
 
-          if ($bins) { Compress-Archive -Path $bins -DestinationPath $zipBin -Force }
-          if ($syms) { Compress-Archive -Path $syms -DestinationPath $zipSym -Force }
+          if ($bins.Count -gt 0) { Compress-Archive -Path $bins -DestinationPath $zipBin -Force }
+          if ($syms.Count -gt 0) { Compress-Archive -Path $syms -DestinationPath $zipSym -Force }
 
           Write-Host "Packed binaries:"; $bins | ForEach-Object { Write-Host "  $_" }
           Write-Host "Packed symbols:";  $syms | ForEach-Object { Write-Host "  $_" }
