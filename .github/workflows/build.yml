@@ -1,15 +1,15 @@
-name: Build (Win32 Debug & Release — DLLs only for Release, symbols for Debug)
+name: Build (Win32 Debug & Release — DLLs only; Debug symbols)
 
 on:
   push:
     branches: [ main ]
-    tags: [ '*' ]              # optional: runs on tag pushes
+    tags: [ '*' ]              # optional
   release:
     types: [published]         # runs when you click "Publish release"
   workflow_dispatch:
 
 permissions:
-  contents: write              # required to upload assets to a Release
+  contents: write              # needed to delete/upload release assets
 
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 8
@@ -35,7 +35,7 @@ jobs:
       - name: Build (${{ matrix.config }})
         run: cmake --build ${{ github.workspace }}\build --config ${{ matrix.config }} -- /m
 
-      # CI artifacts (for convenience): DLLs + (if present) PDBs. No .lib, no .exe.
+      # CI artifacts (for convenience): DLLs + PDBs if present (no .lib, no .exe)
       - name: Upload CI artifacts (${{ matrix.config }})
         uses: actions/upload-artifact@v4
         with:
@@ -45,39 +45,74 @@ jobs:
             ${{ github.workspace }}\build\**\${{ matrix.config }}\*.pdb
           if-no-files-found: warn
 
-      # Package for Release publishing:
-      # - Release: DLLs only
-      # - Debug:   DLLs and PDBs (separate zips)
+      # ----- Release publishing (only when a GitHub Release is published) -----
+
+      # Remove any existing assets with same names (prevents stale zips)
+      - name: Remove existing assets
+        if: github.event_name == 'release' && github.event.action == 'published'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const release_id = context.payload.release.id;
+            const names = [
+              'Aurora.Network-win32-Debug-binaries.zip',
+              'Aurora.Network-win32-Debug-symbols.zip',
+              'Aurora.Network-win32-Release-binaries.zip'
+            ];
+            const {data: assets} = await github.rest.repos.listReleaseAssets({owner, repo, release_id, per_page: 100});
+            for (const a of assets) {
+              if (names.includes(a.name)) {
+                core.info(`Deleting existing asset: ${a.name}`);
+                await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: a.id});
+              }
+            }
+
+      # Stage and zip EXACT files (DLLs only; symbols only) so .lib can never slip in
       - name: Package (${{ matrix.config }})
         if: github.event_name == 'release' && github.event.action == 'published'
         shell: pwsh
         run: |
-          $cfg  = "${{ matrix.config }}"
-          $root = "${{ github.workspace }}"
-          $bld  = "$root\build"
+          $cfg   = "${{ matrix.config }}"
+          $root  = "${{ github.workspace }}"
+          $bld   = "$root\build"
+          $stage = "$root\stage\$cfg"
+          $out   = "$root\out"
 
-          # Select exact files for this config
+          # Collect lists (only from this config)
           $all  = Get-ChildItem -Path $bld -Recurse -File | Where-Object { $_.FullName -match "\\$cfg\\" }
           $bins = @($all | Where-Object { $_.Extension -ieq ".dll" } | Select-Object -Expand FullName)
           $syms = @($all | Where-Object { $_.Extension -ieq ".pdb" } | Select-Object -Expand FullName)
 
-          New-Item -ItemType Directory -Force -Path "$root\out" | Out-Null
+          # Prepare clean staging dirs
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stage
+          New-Item -ItemType Directory -Force -Path "$stage\binaries","$stage\symbols" | Out-Null
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-          $zipBin = "$root\out\Aurora.Network-win32-$cfg-binaries.zip"
-          $zipSym = "$root\out\Aurora.Network-win32-$cfg-symbols.zip"
+          # Copy ONLY the files we want into staging
+          foreach ($f in $bins) { Copy-Item $f "$stage\binaries" -Force }
+          if ($cfg -eq "Debug") {
+            foreach ($f in $syms) { Copy-Item $f "$stage\symbols" -Force }
+          }
+
+          # Zip from staging (guarantees no .lib/.exe/etc)
+          $zipBin = "$out\Aurora.Network-win32-$cfg-binaries.zip"
+          $zipSym = "$out\Aurora.Network-win32-$cfg-symbols.zip"
           if (Test-Path $zipBin) { Remove-Item $zipBin -Force }
           if (Test-Path $zipSym) { Remove-Item $zipSym -Force }
 
-          # Always create binaries zip from DLLs only
-          if ($bins.Count -gt 0) { Compress-Archive -Path $bins -DestinationPath $zipBin -Force }
-
-          # Only create symbols zip for Debug (Release intentionally has no symbols)
-          if ($cfg -eq "Debug" -and $syms.Count -gt 0) {
-            Compress-Archive -Path $syms -DestinationPath $zipSym -Force
+          if (Test-Path "$stage\binaries") {
+            $binFiles = Get-ChildItem "$stage\binaries" -File
+            if ($binFiles) { Compress-Archive -Path ($binFiles | Select-Object -Expand FullName) -DestinationPath $zipBin -Force }
           }
 
-          Write-Host "Packed binaries:"; $bins | ForEach-Object { Write-Host "  $_" }
-          Write-Host "Packed symbols:";  if ($cfg -eq "Debug") { $syms | ForEach-Object { Write-Host "  $_" } } else { Write-Host "  (none for Release)" }
+          if ($cfg -eq "Debug" -and (Test-Path "$stage\symbols")) {
+            $symFiles = Get-ChildItem "$stage\symbols" -File
+            if ($symFiles) { Compress-Archive -Path ($symFiles | Select-Object -Expand FullName) -DestinationPath $zipSym -Force }
+          }
+
+          Write-Host "Binaries staged:"; Get-ChildItem "$stage\binaries" -File | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "Symbols staged:";  if ($cfg -eq "Debug") { Get-ChildItem "$stage\symbols" -File | ForEach-Object { Write-Host "  $($_.Name)" } } else { Write-Host "  (none for Release)" }
 
       # Upload assets to the GitHub Release
       - name: Upload Debug assets
