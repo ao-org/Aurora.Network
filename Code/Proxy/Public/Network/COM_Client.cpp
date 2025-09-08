@@ -54,30 +54,38 @@ inline namespace Proxy
 
     HRESULT Client::Attach(vbInt32 OnAttach, vbInt32 OnDetach, vbInt32 OnForward, vbInt32 OnReceive)
     {
-        const auto OnClientAttach  = [OnAttach]() {
-            ((void (STDAPICALLTYPE *)()) OnAttach)();
-        };
-        const auto OnClientDetach  = [OnDetach](SInt32 Code) {
-            ((void (STDAPICALLTYPE *)(vbInt32)) OnDetach)(Code);
-        };
+        const auto OnClientAttach = [OnAttach]() {
+            ((void (STDAPICALLTYPE*)()) OnAttach)();
+            };
+
+        const auto OnClientDetach = [OnDetach](SInt32 Code) {
+            ((void (STDAPICALLTYPE*)(vbInt32)) OnDetach)((vbInt32)Code);
+            };
+
         const auto OnClientForward = [OnForward](auto Message) {
-            CComObjectStackEx<Reader> CComReader;
+            CComObject<Reader>* pReader = nullptr;
+            if (SUCCEEDED(CComObject<Reader>::CreateInstance(&pReader)) && pReader) {
+                pReader->mWrapper = Message;
+                pReader->AddRef(); // guard lifetime across the VB call
+                ((void (STDAPICALLTYPE*)(CComObject<Reader>*)) OnForward)(pReader);
+                pReader->Release();
+            }
+            };
 
-            CComReader.mWrapper = Message;
-
-            ((void (STDAPICALLTYPE *)(CComObjectStackEx<Reader> *)) OnForward)(& CComReader);
-        };
         const auto OnClientReceive = [OnReceive](auto Message) {
-            CComObjectStackEx<Reader> CComReader;
-
-            CComReader.mWrapper = Message;
-
-            ((void (STDAPICALLTYPE *)(CComObjectStackEx<Reader> *)) OnReceive)(& CComReader);
-        };
+            CComObject<Reader>* pReader = nullptr;
+            if (SUCCEEDED(CComObject<Reader>::CreateInstance(&pReader)) && pReader) {
+                pReader->mWrapper = Message;
+                pReader->AddRef(); // guard lifetime across the VB call
+                ((void (STDAPICALLTYPE*)(CComObject<Reader>*)) OnReceive)(pReader);
+                pReader->Release();
+            }
+            };
 
         mWrapper->Attach(OnClientAttach, OnClientDetach, OnClientForward, OnClientReceive);
         return S_OK;
     }
+
 
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

@@ -3,3 +3,5 @@
 cmake-build-debug
 cmake-build-release
 /build_debug
+build_release/ALL_BUILD.vcxproj
+/build_release
